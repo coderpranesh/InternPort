@@ -1,0 +1,5 @@
+export const API_BASE_URL = process.env.VUE_APP_API_URL || 'http://localhost:5000'
+export const APP_NAME = 'InternPort'
+export const APP_VERSION = '1.0.0'
+export const TOKEN_KEY = 'internport_token'
+export const USER_KEY = 'internport_user'
