@@ -390,7 +390,7 @@ export default {
           const token = store.state.token
           const headers = {
             Authorization: `Bearer ${token}`,
-            'Content-Type': 'multipart/form-data'
+            // 'Content-Type': 'multipart/form-data'
           }
           
           const response = await axios.post('/api/upload-resume', formData, { headers })

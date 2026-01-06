@@ -1,19 +1,20 @@
 <template>
-  <div id="app">
-    <Toast />
-    <router-view />
-  </div>
+  <AppNavbar v-if="showNavbar" />
+  <router-view />
 </template>
 
-<script>
-import Toast from 'primevue/toast'
+<script setup>
+import { computed } from "vue"
+import { useRoute } from "vue-router"
+import AppNavbar from "./components/layout/AppNavbar.vue"
 
-export default {
-  name: 'App',
-  components: {
-    Toast
-  }
-}
+const route = useRoute()
+
+// Show Navbar only on protected pages
+const showNavbar = computed(() => {
+  const publicRoutes = ["/login", "/register", "/forgot-password", "/terms", "/privacy"]
+  return !publicRoutes.includes(route.path)
+})
 </script>
 
 <style>

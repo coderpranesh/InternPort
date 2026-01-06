@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const apiClient = axios.create({
   baseURL: process.env.NODE_ENV === 'production' 
-    ? ''  // Empty string for production as we'll use relative paths
+    ? '' 
     : 'http://localhost:5000',
   headers: {
     'Content-Type': 'application/json'
@@ -10,7 +10,6 @@ const apiClient = axios.create({
   withCredentials: false
 })
 
-// Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
@@ -24,7 +23,6 @@ apiClient.interceptors.request.use(
   }
 )
 
-// Response interceptor
 apiClient.interceptors.response.use(
   (response) => {
     return response

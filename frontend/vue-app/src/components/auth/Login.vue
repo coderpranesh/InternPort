@@ -82,52 +82,10 @@
             :loading="loading"
             size="large"
           />
-          
-          <Divider>
-            <span class="divider-text">or continue with</span>
-          </Divider>
-          
-          <div class="social-login">
-            <Button
-              icon="pi pi-google"
-              label="Google"
-              outlined
-              class="w-full"
-              @click="socialLogin('google')"
-            />
-          </div>
         </form>
         
         <div class="login-footer">
           <p>Don't have an account? <router-link to="/register" class="register-link">Create account</router-link></p>
-        </div>
-        
-        <div class="demo-credentials">
-          <h4>Demo Accounts</h4>
-          <div class="demo-account" @click="fillDemo('admin')">
-            <i class="pi pi-shield"></i>
-            <div>
-              <strong>Admin</strong>
-              <span>admin@internport.com / admin123</span>
-            </div>
-            <i class="pi pi-chevron-right"></i>
-          </div>
-          <div class="demo-account" @click="fillDemo('student')">
-            <i class="pi pi-user"></i>
-            <div>
-              <strong>Student</strong>
-              <span>student@internport.com / student123</span>
-            </div>
-            <i class="pi pi-chevron-right"></i>
-          </div>
-          <div class="demo-account" @click="fillDemo('company')">
-            <i class="pi pi-building"></i>
-            <div>
-              <strong>Company</strong>
-              <span>company@internport.com / company123</span>
-            </div>
-            <i class="pi pi-chevron-right"></i>
-          </div>
         </div>
       </div>
     </div>

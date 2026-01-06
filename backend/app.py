@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from werkzeug.utils import secure_filename
 from models import db, User, StudentProfile, CompanyProfile, Internship, Application
 from auth import token_required, role_required, create_token
 import uuid
@@ -193,8 +194,27 @@ def create_internship():
             return jsonify({'error': f'{field} is required'}), 400
     
     try:
-        last_date = datetime.fromisoformat(data['last_date'])
-    except:
+        last_date_str = data['last_date']
+       
+        if isinstance(last_date_str, str):
+            if 'T' in last_date_str:
+                if 'Z' in last_date_str:
+                    last_date_str = last_date_str.replace('Z', '+00:00')
+                last_date = datetime.fromisoformat(last_date_str)
+            else:
+                last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
+                last_date = last_date.replace(hour=23, minute=59, second=59)
+        else:
+            return jsonify({'error': 'Invalid date format. Expected YYYY-MM-DD or ISO format'}), 400
+
+        if last_date < datetime.utcnow():
+            return jsonify({'error': 'Last date must be in the future'}), 400
+            
+    except ValueError as e:
+        print(f"Date parsing error: {str(e)}")
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD format'}), 400
+    except Exception as e:
+        print(f"Unexpected date parsing error: {str(e)}")
         return jsonify({'error': 'Invalid date format'}), 400
     
     internship = Internship(
@@ -238,8 +258,13 @@ def get_internships():
     internships = query.order_by(Internship.created_at.desc()).all()
     
     result = []
+    current_time = datetime.utcnow()
+    
     for internship in internships:
         company = CompanyProfile.query.get(internship.company_id)
+        
+        is_open = internship.last_date > current_time
+        
         result.append({
             'id': internship.id,
             'title': internship.title,
@@ -250,7 +275,9 @@ def get_internships():
             'last_date': internship.last_date.isoformat(),
             'created_at': internship.created_at.isoformat(),
             'company_name': company.company_name if company else 'Unknown',
-            'company_id': internship.company_id
+            'company_id': internship.company_id,
+            'is_active': is_open,
+            'is_open': is_open    
         })
     
     return jsonify(result)
@@ -264,6 +291,7 @@ def get_internship(internship_id):
         return jsonify({'error': 'Internship not found'}), 404
     
     company = CompanyProfile.query.get(internship.company_id)
+    is_open = internship.last_date > datetime.utcnow()
     
     return jsonify({
         'id': internship.id,
@@ -275,7 +303,9 @@ def get_internship(internship_id):
         'last_date': internship.last_date.isoformat(),
         'created_at': internship.created_at.isoformat(),
         'company_name': company.company_name if company else 'Unknown',
-        'company_description': company.description if company else ''
+        'company_description': company.description if company else '',
+        'is_active': is_open, 
+        'is_open': is_open    
     })
 
 @app.route('/api/internships/<int:internship_id>', methods=['PUT'])
@@ -304,8 +334,22 @@ def update_internship(internship_id):
     
     if data.get('last_date'):
         try:
-            internship.last_date = datetime.fromisoformat(data['last_date'])
-        except:
+            last_date_str = data['last_date']
+            if 'T' in last_date_str:
+                if 'Z' in last_date_str:
+                    last_date_str = last_date_str.replace('Z', '+00:00')
+                last_date = datetime.fromisoformat(last_date_str)
+            else:
+                last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
+                last_date = last_date.replace(hour=23, minute=59, second=59)
+            
+            if last_date < datetime.utcnow():
+                return jsonify({'error': 'Last date must be in the future'}), 400
+                
+            internship.last_date = last_date
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD format'}), 400
+        except Exception:
             return jsonify({'error': 'Invalid date format'}), 400
     
     try:
@@ -341,41 +385,69 @@ def delete_internship(internship_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+
+
 @app.route('/api/apply/<int:internship_id>', methods=['POST'])
+
 @token_required
 @role_required('student')
 def apply_internship(internship_id):
     user_id = request.current_user['user_id']
-    
-    user = User.query.get(user_id)
+
+    user = db.session.get(User, user_id)
     if not user or not user.student_profile:
         return jsonify({'error': 'Student profile not found'}), 404
-    
-    internship = Internship.query.get(internship_id)
+
+    internship = db.session.get(Internship, internship_id)
     if not internship or not internship.is_active:
-        return jsonify({'error': 'Internship not found'}), 404
-    
-    if datetime.utcnow() > internship.last_date:
+        return jsonify({'error': 'Internship is closed or not found'}), 404
+
+    now_utc = datetime.now(timezone.utc)
+
+    last_date = internship.last_date
+    if last_date.tzinfo is None:
+        last_date = last_date.replace(tzinfo=timezone.utc)
+
+    if now_utc > last_date:
         return jsonify({'error': 'Application deadline has passed'}), 400
-    
+
     existing_application = Application.query.filter_by(
         internship_id=internship_id,
         student_id=user.student_profile.id
     ).first()
-    
+
     if existing_application:
         return jsonify({'error': 'Already applied to this internship'}), 400
-    
-    data = request.json
-    cover_letter = data.get('cover_letter', '')
-    
+
+    if 'resume' not in request.files:
+        return jsonify({'error': 'Resume file is required'}), 400
+
+    file = request.files['resume']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    allowed_ext = {'pdf', 'doc', 'docx'}
+    ext = file.filename.rsplit('.', 1)[-1].lower()
+    if ext not in allowed_ext:
+        return jsonify({'error': 'Only PDF, DOC, DOCX allowed'}), 400
+
+    filename = secure_filename(file.filename)
+    unique_name = f"{user.student_profile.id}_{internship_id}_{int(datetime.now().timestamp())}_{filename}"
+
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    save_path = os.path.join(UPLOAD_FOLDER, unique_name)
+
+    file.save(save_path)
+
+    cover_letter = request.form.get('cover_letter', '')
+
     application = Application(
         internship_id=internship_id,
         student_id=user.student_profile.id,
         cover_letter=cover_letter,
-        resume_path=user.student_profile.resume_path
+        resume_path=save_path
     )
-    
+
     try:
         db.session.add(application)
         db.session.commit()
@@ -383,6 +455,7 @@ def apply_internship(internship_id):
             'message': 'Application submitted successfully',
             'application_id': application.id
         }), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -402,9 +475,13 @@ def get_my_applications():
     ).order_by(Application.applied_at.desc()).all()
     
     result = []
+    current_time = datetime.utcnow()
+    
     for app in applications:
         internship = Internship.query.get(app.internship_id)
         company = CompanyProfile.query.get(internship.company_id) if internship else None
+
+        is_open = internship.last_date > current_time if internship else False
         
         result.append({
             'id': app.id,
@@ -413,7 +490,8 @@ def get_my_applications():
             'company_name': company.company_name if company else 'Unknown',
             'status': app.status,
             'applied_at': app.applied_at.isoformat(),
-            'cover_letter': app.cover_letter
+            'cover_letter': app.cover_letter,
+            'internship_open': is_open
         })
     
     return jsonify(result)
@@ -440,6 +518,8 @@ def get_internship_applications(internship_id):
     ).order_by(Application.applied_at.desc()).all()
     
     result = []
+    current_time = datetime.utcnow()
+    
     for app in applications:
         student = StudentProfile.query.get(app.student_id)
         
@@ -452,7 +532,8 @@ def get_internship_applications(internship_id):
             'status': app.status,
             'applied_at': app.applied_at.isoformat(),
             'cover_letter': app.cover_letter,
-            'resume_path': app.resume_path
+            'resume_path': app.resume_path,
+            'internship_open': internship.last_date > current_time
         })
     
     return jsonify(result)
@@ -563,9 +644,12 @@ def get_all_users():
 def get_all_internships():
     internships = Internship.query.order_by(Internship.created_at.desc()).all()
     result = []
+    current_time = datetime.utcnow()
     
     for internship in internships:
         company = CompanyProfile.query.get(internship.company_id)
+        is_open = internship.last_date > current_time
+        
         result.append({
             'id': internship.id,
             'title': internship.title,
@@ -575,6 +659,7 @@ def get_all_internships():
             'last_date': internship.last_date.isoformat(),
             'created_at': internship.created_at.isoformat(),
             'is_active': internship.is_active,
+            'is_open': is_open,
             'application_count': len(internship.applications)
         })
     

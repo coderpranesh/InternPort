@@ -28,7 +28,16 @@
       />
     </div>
     
-    <div class="internship-grid">
+    <div v-if="loading" class="loading-container">
+      <ProgressSpinner />
+    </div>
+    
+    <div v-else-if="filteredInternships.length === 0" class="no-data">
+      <i class="pi pi-inbox" style="font-size: 3rem; color: var(--surface-400);"></i>
+      <p>No internships found</p>
+    </div>
+    
+    <div v-else class="internship-grid">
       <Card v-for="internship in filteredInternships" :key="internship.id" class="internship-card">
         <template #title>{{ internship.title }}</template>
         <template #subtitle>{{ internship.company_name }}</template>
@@ -42,11 +51,19 @@
               </div>
               <div class="detail">
                 <i class="pi pi-money-bill"></i>
-                <span>{{ internship.stipend ? `₹${internship.stipend}/month` : 'Unpaid' }}</span>
+                <span>{{ internship.stipend || 'Unpaid' }}</span>
               </div>
               <div class="detail">
                 <i class="pi pi-calendar"></i>
                 <span>Apply by {{ formatDate(internship.last_date) }}</span>
+              </div>
+              <div class="detail">
+                <i class="pi pi-clock"></i>
+                <span>
+                  <Tag :severity="internship.is_active ? 'success' : 'danger'">
+                    {{ internship.is_active ? 'Open' : 'Closed' }}
+                  </Tag>
+                </span>
               </div>
             </div>
             <div v-if="hasApplied(internship.id)" class="applied-badge">
@@ -60,7 +77,7 @@
             <Button
               label="View Details"
               icon="pi pi-eye"
-              @click="viewInternship(internship.id)"
+              @click="viewInternship(internship)"
               outlined
             />
             <Button
@@ -68,7 +85,7 @@
               label="Apply Now"
               icon="pi pi-send"
               @click="applyForInternship(internship)"
-              :disabled="isPastDeadline(internship.last_date)"
+              :disabled="!internship.is_active"
               severity="success"
             />
             <Button
@@ -92,17 +109,12 @@
       <div v-if="selectedInternship" class="internship-details-dialog">
         <div class="company-info">
           <h3>{{ selectedInternship.company_name }}</h3>
-          <p>{{ selectedInternship.company_description }}</p>
+          <p class="company-description">{{ selectedInternship.company_description || 'No description available' }}</p>
         </div>
         
         <div class="section">
           <h4>Description</h4>
           <p>{{ selectedInternship.description }}</p>
-        </div>
-        
-        <div v-if="selectedInternship.requirements" class="section">
-          <h4>Requirements</h4>
-          <p>{{ selectedInternship.requirements }}</p>
         </div>
         
         <div class="details-summary">
@@ -117,7 +129,7 @@
             <i class="pi pi-money-bill"></i>
             <div>
               <strong>Stipend</strong>
-              <p>{{ selectedInternship.stipend ? `₹${selectedInternship.stipend}/month` : 'Unpaid' }}</p>
+              <p>{{ selectedInternship.stipend || 'Unpaid' }}</p>
             </div>
           </div>
           <div class="detail-item">
@@ -134,6 +146,17 @@
               <p>{{ formatDate(selectedInternship.created_at) }}</p>
             </div>
           </div>
+          <div class="detail-item">
+            <i class="pi pi-info-circle"></i>
+            <div>
+              <strong>Status</strong>
+              <p>
+                <Tag :severity="selectedInternship.is_active ? 'success' : 'danger'">
+                  {{ selectedInternship.is_active ? 'Open' : 'Closed' }}
+                </Tag>
+              </p>
+            </div>
+          </div>
         </div>
       </div>
       <template #footer>
@@ -148,7 +171,7 @@
           label="Apply Now"
           icon="pi pi-send"
           @click="applyForInternship(selectedInternship)"
-          :disabled="isPastDeadline(selectedInternship?.last_date)"
+          :disabled="!selectedInternship?.is_active"
           severity="success"
         />
       </template>
@@ -167,9 +190,10 @@
         </div>
         
         <div class="field">
-          <label>Cover Letter</label>
+          <label for="coverLetter">Cover Letter</label>
           <Textarea
             v-model="applyData.cover_letter"
+            id="coverLetter"
             :rows="5"
             placeholder="Write your cover letter here..."
             class="w-full"
@@ -177,18 +201,38 @@
         </div>
         
         <div class="field">
-          <label>Resume</label>
+          <label for="resume">Resume (Required)</label>
           <div class="resume-upload">
-            <p v-if="currentResume">{{ currentResume }}</p>
-            <p v-else class="no-resume">No resume uploaded</p>
-            <Button
-              label="Upload Resume"
-              icon="pi pi-upload"
-              @click="uploadResume"
-              outlined
-              size="small"
+            <FileUpload
+              id="resume"
+              mode="basic"
+              accept=".pdf,.doc,.docx"
+              :maxFileSize="16000000"
+              :auto="false"
+              chooseLabel="Select Resume"
+              customUpload
+              @select="onFileSelect"
+              :class="{ 'p-invalid': fileError }"
             />
+            <div v-if="selectedFile" class="file-info">
+              <i class="pi pi-file"></i>
+              <span>{{ selectedFile.name }}</span>
+              <span class="file-size">({{ formatFileSize(selectedFile.size) }})</span>
+              <Button
+                icon="pi pi-times"
+                severity="secondary"
+                text
+                rounded
+                @click="clearFile"
+              />
+            </div>
+            <small v-if="fileError" class="p-error">{{ fileError }}</small>
+            <small class="p-text-secondary">Maximum file size: 16MB. Allowed types: PDF, DOC, DOCX</small>
           </div>
+        </div>
+        
+        <div v-if="applyError" class="field">
+          <Message severity="error">{{ applyError }}</Message>
         </div>
       </div>
       <template #footer>
@@ -202,9 +246,13 @@
           label="Submit Application"
           icon="pi pi-send"
           @click="submitApplication"
-          :disabled="!currentResume"
+          :disabled="!selectedFile || applying"
           severity="success"
-        />
+        >
+          <template #loadingicon v-if="applying">
+            <ProgressSpinner style="width: 20px; height: 20px" />
+          </template>
+        </Button>
       </template>
     </Dialog>
     
@@ -215,7 +263,6 @@
 <script>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useStore } from 'vuex'
 import { useToast } from 'primevue/usetoast'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
@@ -224,6 +271,10 @@ import Dropdown from 'primevue/dropdown'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import Toast from 'primevue/toast'
+import Tag from 'primevue/tag'
+import ProgressSpinner from 'primevue/progressspinner'
+import FileUpload from 'primevue/fileupload'
+import Message from 'primevue/message'
 import axios from 'axios'
 
 export default {
@@ -234,15 +285,19 @@ export default {
     Dropdown,
     Dialog,
     Textarea,
-    Toast
+    Toast,
+    Tag,
+    ProgressSpinner,
+    FileUpload,
+    Message
   },
   setup() {
     const router = useRouter()
-    const store = useStore()
     const toast = useToast()
     
     const internships = ref([])
     const myApplications = ref([])
+    const loading = ref(true)
     const filters = ref({
       search: '',
       location: ''
@@ -256,16 +311,20 @@ export default {
       internship_title: '',
       cover_letter: ''
     })
-    const currentResume = ref('')
+    const selectedFile = ref(null)
+    const fileError = ref('')
+    const applyError = ref('')
+    const applying = ref(false)
     
     const fetchInternships = async () => {
+      loading.value = true
       try {
-        const token = store.state.token
+        const token = localStorage.getItem('token')
         const headers = { Authorization: `Bearer ${token}` }
         
         const [internshipsRes, applicationsRes] = await Promise.all([
-          axios.get('/api/internships', { headers }),
-          axios.get('/api/my-applications', { headers })
+          axios.get('http://localhost:5000/api/internships', { headers }),
+          axios.get('http://localhost:5000/api/my-applications', { headers })
         ])
         
         internships.value = internshipsRes.data
@@ -275,72 +334,19 @@ export default {
           .map(i => i.location)
           .filter(Boolean)
         )]
-        locations.value = uniqueLocations
+        locations.value = uniqueLocations.map(loc => ({ label: loc, value: loc }))
         
-        fetchCurrentResume()
       } catch (error) {
+        console.error('Error fetching internships:', error)
         toast.add({
           severity: 'error',
           summary: 'Error',
           detail: 'Failed to load internships',
           life: 5000
         })
+      } finally {
+        loading.value = false
       }
-    }
-    
-    const fetchCurrentResume = async () => {
-      try {
-        const token = store.state.token
-        const headers = { Authorization: `Bearer ${token}` }
-        
-        const response = await axios.get('/api/profile', { headers })
-        if (response.data.resume_path) {
-          currentResume.value = response.data.resume_path.split('_').pop()
-        }
-      } catch (error) {
-        console.error('Error fetching resume:', error)
-      }
-    }
-    
-    const uploadResume = () => {
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.accept = '.pdf,.doc,.docx'
-      
-      input.onchange = async (e) => {
-        const file = e.target.files[0]
-        if (!file) return
-        
-        const formData = new FormData()
-        formData.append('resume', file)
-        
-        try {
-          const token = store.state.token
-          const headers = {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'multipart/form-data'
-          }
-          
-          const response = await axios.post('/api/upload-resume', formData, { headers })
-          currentResume.value = file.name
-          
-          toast.add({
-            severity: 'success',
-            summary: 'Success',
-            detail: 'Resume uploaded successfully',
-            life: 3000
-          })
-        } catch (error) {
-          toast.add({
-            severity: 'error',
-            summary: 'Error',
-            detail: error.response?.data?.error || 'Failed to upload resume',
-            life: 5000
-          })
-        }
-      }
-      
-      input.click()
     }
     
     const filteredInternships = computed(() => {
@@ -361,11 +367,6 @@ export default {
       return myApplications.value.some(app => app.internship_id === internshipId)
     }
     
-    const isPastDeadline = (lastDate) => {
-      if (!lastDate) return false
-      return new Date(lastDate) < new Date()
-    }
-    
     const formatDate = (dateString) => {
       if (!dateString) return ''
       return new Date(dateString).toLocaleDateString('en-US', {
@@ -375,8 +376,16 @@ export default {
       })
     }
     
-    const viewInternship = (internshipId) => {
-      selectedInternship.value = internships.value.find(i => i.id === internshipId)
+    const formatFileSize = (bytes) => {
+      if (bytes === 0) return '0 Bytes'
+      const k = 1024
+      const sizes = ['Bytes', 'KB', 'MB', 'GB']
+      const i = Math.floor(Math.log(bytes) / Math.log(k))
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+    }
+    
+    const viewInternship = (internship) => {
+      selectedInternship.value = internship
       showInternshipDialog.value = true
     }
     
@@ -385,7 +394,7 @@ export default {
     }
     
     const applyForInternship = (internship) => {
-      if (isPastDeadline(internship.last_date)) {
+      if (!internship.is_active) {
         toast.add({
           severity: 'warn',
           summary: 'Cannot Apply',
@@ -395,11 +404,11 @@ export default {
         return
       }
       
-      if (!currentResume.value) {
+      if (hasApplied(internship.id)) {
         toast.add({
-          severity: 'warn',
-          summary: 'Resume Required',
-          detail: 'Please upload your resume before applying',
+          severity: 'info',
+          summary: 'Already Applied',
+          detail: 'You have already applied for this internship',
           life: 5000
         })
         return
@@ -410,36 +419,83 @@ export default {
         internship_title: internship.title,
         cover_letter: ''
       }
+      selectedFile.value = null
+      fileError.value = ''
+      applyError.value = ''
       showApplyDialog.value = true
     }
     
+    const onFileSelect = (event) => {
+      const file = event.files[0]
+      console.log("Selected file:", file)
+      selectedFile.value = file
+      
+      // Validate file type
+      const allowedTypes = ['application/pdf', 'application/msword', 
+                           'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+      if (!allowedTypes.includes(file.type) && 
+          !file.name.match(/\.(pdf|doc|docx)$/i)) {
+        fileError.value = 'Invalid file type. Please upload PDF, DOC, or DOCX files only.'
+        return
+      }
+      
+      // Validate file size (16MB max)
+      if (file.size > 16 * 1024 * 1024) {
+        fileError.value = 'File size too large. Maximum size is 16MB.'
+        return
+      }
+      
+      selectedFile.value = file
+      fileError.value = ''
+    }
+    
+    const clearFile = () => {
+      selectedFile.value = null
+      fileError.value = ''
+    }
+    
     const submitApplication = async () => {
+      if (!selectedFile.value) {
+        fileError.value = 'Please select a resume file'
+        return
+      }
+      
+      applying.value = true
+      applyError.value = ''
+      
       try {
-        const token = store.state.token
-        const headers = { Authorization: `Bearer ${token}` }
+        const token = localStorage.getItem('token')
+        const formData = new FormData()
+        formData.append('resume', selectedFile.value)
+        formData.append('cover_letter', applyData.value.cover_letter)
+        console.log("Sending file:", selectedFile.value)
+
         
         const response = await axios.post(
-          `/api/apply/${applyData.value.internship_id}`,
-          { cover_letter: applyData.value.cover_letter },
-          { headers }
+          `http://localhost:5000/api/apply/${applyData.value.internship_id}`,
+          formData,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'multipart/form-data'
+            }
+          }
         )
         
         toast.add({
           severity: 'success',
           summary: 'Success',
-          detail: 'Application submitted successfully',
+          detail: 'Application submitted successfully!',
           life: 3000
         })
         
         showApplyDialog.value = false
         fetchInternships()
       } catch (error) {
-        toast.add({
-          severity: 'error',
-          summary: 'Error',
-          detail: error.response?.data?.error || 'Failed to submit application',
-          life: 5000
-        })
+        console.error('Application error:', error)
+        applyError.value = error.response?.data?.error || 'Failed to submit application. Please try again.'
+      } finally {
+        applying.value = false
       }
     }
     
@@ -450,7 +506,9 @@ export default {
       }
     }
     
-    onMounted(fetchInternships)
+    onMounted(() => {
+      fetchInternships()
+    })
     
     return {
       internships,
@@ -461,16 +519,21 @@ export default {
       selectedInternship,
       showApplyDialog,
       applyData,
-      currentResume,
+      selectedFile,
+      fileError,
+      applyError,
+      applying,
+      loading,
       hasApplied,
-      isPastDeadline,
       formatDate,
+      formatFileSize,
       fetchInternships,
       viewInternship,
       viewApplication,
       applyForInternship,
       submitApplication,
-      uploadResume,
+      onFileSelect,
+      clearFile,
       clearFilters
     }
   }
@@ -492,7 +555,7 @@ export default {
 }
 
 .header h1 {
-  color: #2c3e50;
+  color: var(--surface-900);
   margin: 0;
 }
 
@@ -501,11 +564,33 @@ export default {
   gap: 1rem;
   margin-bottom: 2rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .search-input {
   flex: 1;
-  max-width: 400px;
+  min-width: 250px;
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 300px;
+}
+
+.no-data {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 300px;
+  color: var(--surface-400);
+}
+
+.no-data p {
+  margin-top: 1rem;
+  font-size: 1.2rem;
 }
 
 .internship-grid {
@@ -515,21 +600,27 @@ export default {
 }
 
 .internship-card {
-  transition: transform 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
 .internship-card:hover {
   transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .internship-details {
   position: relative;
+  min-height: 180px;
 }
 
 .description {
-  color: #666;
+  color: var(--surface-700);
   margin-bottom: 1rem;
   line-height: 1.5;
+  display: -webkit-box;
+  /* -webkit-line-clamp: 3; */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .details-grid {
@@ -543,22 +634,22 @@ export default {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #7f8c8d;
+  color: var(--surface-600);
   font-size: 0.9rem;
 }
 
 .detail i {
-  color: #667eea;
+  color: var(--primary-color);
 }
 
 .applied-badge {
   position: absolute;
   top: 0;
   right: 0;
-  background: #4caf50;
+  background: var(--green-500);
   color: white;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  padding: 0.25rem 0.75rem;
+  border-radius: 16px;
   font-size: 0.8rem;
   display: flex;
   align-items: center;
@@ -576,14 +667,20 @@ export default {
 }
 
 .company-info {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--surface-200);
 }
 
 .company-info h3 {
   margin: 0 0 0.5rem 0;
-  color: #2c3e50;
+  color: var(--surface-900);
+}
+
+.company-description {
+  color: var(--surface-600);
+  line-height: 1.6;
+  margin: 0;
 }
 
 .section {
@@ -591,12 +688,12 @@ export default {
 }
 
 .section h4 {
-  color: #2c3e50;
+  color: var(--surface-900);
   margin: 0 0 0.5rem 0;
 }
 
 .section p {
-  color: #666;
+  color: var(--surface-700);
   line-height: 1.6;
   margin: 0;
 }
@@ -604,7 +701,7 @@ export default {
 .details-summary {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 1rem;
+  gap: 1.5rem;
   margin-top: 2rem;
 }
 
@@ -615,19 +712,20 @@ export default {
 }
 
 .detail-item i {
-  color: #667eea;
+  color: var(--primary-color);
   margin-top: 0.25rem;
 }
 
 .detail-item strong {
   display: block;
-  color: #2c3e50;
+  color: var(--surface-900);
   font-size: 0.9rem;
+  margin-bottom: 0.25rem;
 }
 
 .detail-item p {
-  margin: 0.25rem 0 0 0;
-  color: #666;
+  margin: 0;
+  color: var(--surface-700);
 }
 
 .apply-form {
@@ -641,32 +739,74 @@ export default {
 .field label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
+  color: var(--surface-900);
   font-weight: 500;
 }
 
 .internship-title {
   font-weight: bold;
-  color: #2c3e50;
+  color: var(--surface-900);
   margin: 0;
-  padding: 0.5rem;
-  background: #f8f9fa;
-  border-radius: 4px;
+  padding: 0.75rem;
+  background: var(--surface-50);
+  border-radius: 6px;
+  border: 1px solid var(--surface-200);
 }
 
 .resume-upload {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem;
-  background: #f8f9fa;
-  border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  margin-top: 0.5rem;
 }
 
-.no-resume {
-  color: #999;
-  font-style: italic;
-  margin: 0;
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--surface-50);
+  border-radius: 6px;
+  border: 1px solid var(--surface-200);
+}
+
+.file-info i {
+  color: var(--primary-color);
+}
+
+.file-size {
+  color: var(--surface-500);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .internship-list {
+    padding: 1rem;
+  }
+  
+  .header {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+  
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .search-input {
+    min-width: auto;
+  }
+  
+  .internship-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .details-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .details-summary {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
